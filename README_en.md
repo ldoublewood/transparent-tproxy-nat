@@ -1,0 +1,204 @@
+# transparent-tproxy-nat
+
+A NAT transparent gateway built with nftables. Redirects TCP/UDP traffic from LAN devices to a local TPROXY port for transparent proxying, with full NAT gateway functionality (forwarding + MASQUERADE).
+
+## Use Case
+
+A Ubuntu 22.04 machine with two network interfaces:
+- **LAN interface** (e.g., `wlo1`) — LAN devices connect via a WiFi AP
+- **WAN interface** (e.g., `enx00e04c6515ff`) — connects to the internet
+
+Phones, tablets, or PCs on the LAN set their default gateway to this machine's LAN IP. All traffic transparently passes through a local proxy (e.g., ipt2socks, Xray, Clash) to reach the internet.
+
+```
+Phone(192.168.2.x) ──WiFi──→ wlo1(192.168.2.200) Gateway enx00e04c6515ff(192.168.1.217) ──→ ISP ──→ Internet
+                                ↑                              ↑
+                            LAN iface                      WAN iface
+```
+
+> **Single-interface setup:** Set both `LAN_IFACE` and `WAN_IFACE` to the same interface (e.g., `wlo1`) for hairpin NAT. The rules work identically.
+
+## Files
+
+| File | Purpose |
+|------|---------|
+| `nftables-tproxy.conf` | nftables rules (TPROXY interception + filtering + MASQUERADE) |
+| `setup-tproxy-route.sh` | Policy routing + kernel parameters setup script |
+| `tproxy-route.service` | systemd service to persist policy routing across reboots |
+
+## Quick Start
+
+### 1. Start the proxy
+
+Ensure a TPROXY-aware proxy is running on `0.0.0.0:17893`:
+
+```bash
+# Example: ipt2socks
+ipt2socks -s <SOCKS5_SERVER_IP> -p <SOCKS5_PORT> -l 17893 -b 0.0.0.0 -v
+
+# Verify
+ss -tlnp | grep 17893   # Must show 0.0.0.0:17893, NOT 127.0.0.1
+```
+
+> **⚠️ Critical:** The proxy must listen on `0.0.0.0` (or `*:17893`), **never** `127.0.0.1`. TPROXY-delivered packets retain the client's original destination address. A socket bound to `127.0.0.1` will not match and the kernel will RST the connection.
+
+### 2. Edit configuration variables
+
+Update the variables at the top of `nftables-tproxy.conf` to match your environment:
+
+```bash
+define LAN_IFACE     = wlo1               # LAN interface name
+define WAN_IFACE     = enx00e04c6515ff    # WAN interface name
+define LAN_SUBNET    = 192.168.2.0/24     # LAN subnet (including this host)
+define TPROXY_PORT   = 17893              # TPROXY listening port
+define TPROXY_MARK   = 1                  # Firewall mark
+```
+
+To find your interfaces:
+```bash
+ip -br addr show
+ip route show default    # Shows the WAN interface
+```
+
+### 3. Run policy routing setup (once)
+
+```bash
+sudo bash setup-tproxy-route.sh
+```
+
+This script configures:
+- Policy routing: `fwmark 1 → table 100 → local lo` (required for TPROXY)
+- Kernel parameters: `ip_forward=1`, `rp_filter=0`, `accept_local=1`, etc.
+
+### 4. Deploy nftables rules
+
+```bash
+sudo cp nftables-tproxy.conf /etc/nftables.conf
+sudo systemctl enable --now nftables
+```
+
+Verify the rules are loaded:
+```bash
+sudo nft list ruleset
+```
+
+### 5. Configure clients
+
+On your phone / tablet / PC:
+- **Default gateway**: This machine's LAN IP (e.g., `192.168.2.200`)
+- **DNS**: Automatic (UDP DNS goes through TPROXY)
+
+### 6. Verify
+
+Open any webpage on the client device, then check on the gateway:
+
+```bash
+# Check if the proxy has active connections
+ss -tnp | grep 17893
+
+# Check for forward drops
+sudo nft list chain inet nat_gateway forward | grep counter
+
+# Capture client traffic
+sudo tcpdump -i wlo1 -n 'host <phone-ip>'
+```
+
+## Data Flow
+
+### TCP/UDP — via TPROXY
+
+```
+Client → wlo1 → prerouting(TPROXY :17893, mark=1)
+                → policy route(table 100 → lo)
+                → INPUT(meta mark 1 accept)
+                → proxy → SOCKS5 upstream → WAN → Internet
+```
+
+### ICMP — plain forwarding + MASQUERADE
+
+```
+Client → wlo1 → forward(LAN→WAN) → postrouting(MASQUERADE) → Internet
+```
+
+## Five Chains at a Glance
+
+| Chain | Hook / Priority | Purpose |
+|-------|----------------|---------|
+| `tproxy_prerouting` | prerouting / mangle | Intercept TCP/UDP → TPROXY to `:17893`, skip LAN/local/multicast |
+| `input` | input / filter | Drop by default; allow SSH, ICMP, DHCP, and **TPROXY-marked packets** |
+| `forward` | forward / filter | Allow LAN→WAN forwarding and TPROXY spoofed reply path (lo→LAN) |
+| `output` | output / filter | Accept all (this host is trusted) |
+| `postrouting` | postrouting / srcnat | MASQUERADE on WAN interface for forwarded traffic |
+
+## Persistence
+
+```bash
+# nftables rules (auto-start on boot)
+sudo cp nftables-tproxy.conf /etc/nftables.conf
+sudo systemctl enable nftables
+
+# Policy routing (auto-start on boot)
+sudo cp setup-tproxy-route.sh /usr/local/bin/
+sudo chmod +x /usr/local/bin/setup-tproxy-route.sh
+sudo cp tproxy-route.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable tproxy-route
+```
+
+## Debugging
+
+```bash
+# View all rules and counters
+sudo nft list ruleset
+
+# Monitor nftables logs in real time
+sudo journalctl -k -f | grep nft
+
+# Packet capture at each hop
+sudo tcpdump -i wlo1 -n 'not host 192.168.2.200'   # LAN inbound
+sudo tcpdump -i enx00e04c6515ff -n                   # WAN outbound
+
+# Check policy routing
+ip -4 rule show | grep fwmark
+ip route show table 100
+
+# Check kernel parameters
+sysctl net.ipv4.ip_forward
+sysctl net.ipv4.conf.all.rp_filter
+```
+
+## Troubleshooting
+
+### Client cannot access the internet
+
+Work through each layer:
+
+| Check | Command |
+|-------|---------|
+| Proxy listening on `0.0.0.0:17893` | `ss -tlnp \| grep 17893` |
+| nftables rules loaded | `sudo nft list ruleset` |
+| Policy routing in place | `ip -4 rule show \| grep fwmark` |
+| IP forwarding enabled | `sysctl net.ipv4.ip_forward` |
+| TPROXY rule matching | Check counters in `sudo nft list chain inet nat_gateway tproxy_prerouting` |
+| INPUT accepts TPROXY packets | `sudo nft list chain inet nat_gateway input \| grep mark` |
+| Forward chain not dropping | `sudo nft list chain inet nat_gateway forward \| grep counter` |
+| Client packets arriving at wlo1 | `sudo tcpdump -i wlo1 -n 'host <client-ip>'` |
+| WAN outbound working | `sudo tcpdump -i enx00e04c6515ff -n 'host 8.8.8.8'` |
+
+### TPROXY packets dropped by INPUT chain
+
+**Symptom:** `input` chain drop counter keeps increasing.
+
+**Cause:** TPROXY-delivered packets pass through the INPUT chain after policy routing to the local stack. They must be explicitly accepted.
+
+**Fix:** Ensure the INPUT chain has `meta mark 0x1 accept`.
+
+### `rp_filter` drops spoofed reply packets
+
+TPROXY reply packets have a spoofed source address (the original external destination). If `rp_filter` is enabled, the kernel drops them.
+
+Verify both are `0`: `sysctl net.ipv4.conf.all.rp_filter` and `sysctl net.ipv4.conf.wlo1.rp_filter`.
+
+## License
+
+MIT
