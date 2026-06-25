@@ -1,0 +1,20 @@
+[Unit]
+Description=TPROXY Policy Routing Setup
+Documentation=https://wiki.nftables.org/
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+
+# 参数: fwmark 路由表编号 网卡名称
+# 需与 nftables-tproxy.conf 中的 TPROXY_MARK 保持一致
+ExecStart=/usr/local/bin/setup-tproxy-route.sh 1 100 wlo1
+ExecStop=/bin/bash -c '\
+  ip -4 rule  del fwmark 1 table 100 2>/dev/null; \
+  ip -4 route del local 0.0.0.0/0 dev lo table 100 2>/dev/null; \
+  echo "TPROXY routing rules removed."'
+
+[Install]
+WantedBy=multi-user.target
