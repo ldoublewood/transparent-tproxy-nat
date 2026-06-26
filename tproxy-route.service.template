@@ -1,0 +1,23 @@
+[Unit]
+Description=TPROXY NAT Gateway – Policy Routing Setup
+Documentation=https://wiki.nftables.org/
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+
+# ⚠ 此文件由 deploy.sh 从 tproxy-route.service.template 自动生成
+# 参数来自 .env，请勿直接编辑
+
+ExecStart=/usr/local/bin/setup-tproxy-route.sh ${TPROXY_MARK} ${RT_TABLE} ${LAN_IFACE} ${LAN_SUBNET}
+
+ExecStop=/bin/bash -c '\
+  ip -4 rule  del fwmark ${TPROXY_MARK} table ${RT_TABLE} 2>/dev/null; \
+  ip -4 route del local 0.0.0.0/0 dev lo table ${RT_TABLE} 2>/dev/null; \
+  sysctl -w net.ipv4.ip_forward=0 >/dev/null; \
+  echo "TPROXY NAT gateway routing removed."'
+
+[Install]
+WantedBy=multi-user.target

@@ -20,9 +20,13 @@ nftables 实现的 NAT 透明网关，将局域网内其他设备的 TCP/UDP 流
 
 | 文件 | 用途 |
 |------|------|
-| `nftables-tproxy.conf` | nftables 规则（TPROXY 截获 + 过滤 + MASQUERADE） |
-| `setup-tproxy-route.sh` | 策略路由 + 内核参数 一次性配置脚本 |
-| `tproxy-route.service` | systemd 服务，持久化策略路由 |
+| `.env.example` | **配置模板** — 所有变量集中在此，复制为 `.env` 后编辑 |
+| `deploy.sh` | **一键部署脚本** — 生成配置、配置路由、加载规则、安装服务 |
+| `nftables-tproxy.conf.template` | nftables 规则模板（变量占位） |
+| `tproxy-route.service.template` | systemd 服务模板（变量占位） |
+| `setup-tproxy-route.sh` | 策略路由 + 内核参数 配置脚本 |
+| `nftables-tproxy.conf` | nftables 规则（由 `deploy.sh` 自动生成） |
+| `tproxy-route.service` | systemd 服务（由 `deploy.sh` 自动生成） |
 
 ## 快速开始
 
@@ -40,53 +44,36 @@ ss -tlnp | grep 17893   # 应显示 0.0.0.0:17893，而非 127.0.0.1
 
 > **⚠️ 关键：** 代理必须监听 `0.0.0.0`（或 `*:17893`），**不能**是 `127.0.0.1`。TPROXY 投递的包目标地址是客户端原始请求的外部 IP，监听 `127.0.0.1` 会导致 socket 查找失败。
 
-### 2. 修改配置变量
-
-编辑 `nftables-tproxy.conf` 顶部变量，匹配你的实际环境：
+### 2. 配置变量（唯一入口）
 
 ```bash
-define LAN_IFACE     = wlo1               # 局域网网卡名称
-define WAN_IFACE     = enx00e04c6515ff    # 互联网出口网卡名称
-define LAN_SUBNET    = 192.168.2.0/24     # 局域网子网 (含本机)
-define TPROXY_PORT   = 17893              # TPROXY 监听端口
-define TPROXY_MARK   = 1                  # 防火墙标记
+cp .env.example .env
+nano .env    # 编辑网卡名、子网等变量
 ```
 
-查看你的网卡：
-```bash
-ip -br addr show
-ip route show default    # WAN 口的默认路由
-```
+`.env` 中包含了所有需要配置的变量（网卡名、子网、端口等），不再需要分别编辑各个文件。
 
-### 3. 执行策略路由（一次性）
+### 3. 一键部署
 
 ```bash
-sudo bash setup-tproxy-route.sh
+sudo bash deploy.sh
 ```
 
-此脚本配置：
-- 策略路由：`fwmark 1 → table 100 → local lo`（TPROXY 必需）
-- 内核参数：`ip_forward=1`、`rp_filter=0`、`accept_local=1` 等
+此命令自动完成：
+- 从模板生成 `nftables-tproxy.conf` 和 `tproxy-route.service`
+- 配置策略路由和内核参数
+- 加载 nftables 规则
+- （可选）安装 systemd 开机自启服务（需在 `.env` 中设置 `INSTALL_SERVICES=yes`）
 
-### 4. 部署 nftables 规则
+> 如需卸载：`sudo bash deploy.sh --uninstall`
 
-```bash
-sudo cp nftables-tproxy.conf /etc/nftables.conf
-sudo systemctl enable --now nftables
-```
-
-验证规则已加载：
-```bash
-sudo nft list ruleset
-```
-
-### 5. 配置客户端
+### 4. 配置客户端
 
 在手机 / 平板上设置：
 - **默认网关**：本机 LAN 口 IP（如 `192.168.2.200`）
 - **DNS**：自动（UDP DNS 经 TPROXY 代理解析）
 
-### 6. 验证
+### 5. 验证
 
 在手机浏览器打开任意网页，同时在服务端检查：
 
@@ -120,6 +107,9 @@ sudo tcpdump -i wlo1 -n 'host 192.168.2.64'
 
 ## 持久化
 
+**推荐方式：** 在 `.env` 中设置 `INSTALL_SERVICES=yes`，然后运行 `sudo bash deploy.sh`，脚本会自动安装所有 systemd 服务。
+
+**手动方式：**
 ```bash
 # nftables 规则（开机自启）
 sudo cp nftables-tproxy.conf /etc/nftables.conf

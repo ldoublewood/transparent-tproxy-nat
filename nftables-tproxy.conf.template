@@ -2,6 +2,9 @@
 # =============================================================================
 # nftables NAT 透明网关 + TPROXY  完整配置
 # =============================================================================
+# ⚠ 此文件由 deploy.sh 从 nftables-tproxy.conf.template 自动生成
+# ⚠ 请勿直接编辑此文件 — 修改 .env 后重新运行 sudo bash deploy.sh
+# =============================================================================
 # 拓扑:
 #   手机(192.168.2.64) → WiFi AP → wlo1(192.168.2.200) 本机 enx00e04c6515ff(192.168.1.217) → ISP(192.168.1.1) → 互联网
 #                         (LAN)      ↑ 双网卡网关              ↑ (WAN)
@@ -23,13 +26,13 @@
 flush ruleset
 
 # =============================================================================
-# 用户变量 — 务必按实际环境修改
+# 用户变量 — 由 deploy.sh 从 .env 自动填入
 # =============================================================================
-define LAN_IFACE     = wlo1               # LAN口网卡 (客户端接入侧)
-define WAN_IFACE     = enx00e04c6515ff    # WAN口网卡 (互联网出口)
-define LAN_SUBNET    = 192.168.2.0/24     # LAN子网
-define TPROXY_PORT   = 17893              # TPROXY 监听端口
-define TPROXY_MARK   = 1                  # 防火墙标记 (与策略路由 fwmark 一致)
+define LAN_IFACE     = ${LAN_IFACE}       # LAN口网卡 (客户端接入侧)
+define WAN_IFACE     = ${WAN_IFACE}       # WAN口网卡 (互联网出口)
+define LAN_SUBNET    = ${LAN_SUBNET}      # LAN子网
+define TPROXY_PORT   = ${TPROXY_PORT}     # TPROXY 监听端口
+define TPROXY_MARK   = ${TPROXY_MARK}     # 防火墙标记 (与策略路由 fwmark 一致)
 
 # =============================================================================
 # table inet nat_gateway

@@ -33,15 +33,26 @@ A nftables-based transparent proxy NAT gateway. It uses TPROXY to intercept TCP/
 
 ## Common commands
 
-**Deploy the full stack (must run as root):**
+**One-click deploy (preferred):**
 ```bash
-# 1. Policy routing + kernel params (must run BEFORE nftables)
-sudo bash setup-tproxy-route.sh [fwmark] [rt_table] [iface] [lan_subnet]
+cp .env.example .env && nano .env     # Edit config once
+sudo bash deploy.sh                   # Does everything below
+sudo bash deploy.sh --uninstall       # Tear down completely
+```
 
-# 2. Load nftables rules
+**Deploy step-by-step (must run as root):**
+```bash
+# 1. Generate configs from templates (if not using deploy.sh)
+envsubst < nftables-tproxy.conf.template > nftables-tproxy.conf
+envsubst < tproxy-route.service.template > tproxy-route.service
+
+# 2. Policy routing + kernel params (must run BEFORE nftables)
+sudo bash setup-tproxy-route.sh
+
+# 3. Load nftables rules
 sudo nft -f nftables-tproxy.conf
 
-# 3. Persist for reboots
+# 4. Persist for reboots (or set INSTALL_SERVICES=yes in .env and re-run deploy.sh)
 sudo cp nftables-tproxy.conf /etc/nftables.conf && sudo systemctl enable --now nftables
 sudo cp setup-tproxy-route.sh /usr/local/bin/ && sudo chmod +x /usr/local/bin/setup-tproxy-route.sh
 sudo cp tproxy-route.service /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl enable --now tproxy-route
@@ -65,6 +76,9 @@ ss -tlnp | grep 17893                    # Proxy must listen on 0.0.0.0:17893
 
 **Cleanup:**
 ```bash
+sudo bash deploy.sh --uninstall          # One-step cleanup (preferred)
+
+# Manual cleanup:
 sudo nft flush ruleset                    # Remove all nftables rules
 ip -4 rule del fwmark 1 table 100         # Remove policy routing rule
 ip -4 route del local 0.0.0.0/0 dev lo table 100  # Remove route table entry
@@ -80,10 +94,17 @@ ip -4 route del local 0.0.0.0/0 dev lo table 100  # Remove route table entry
 
 4. **Single-interface (hairpin) mode:** When both `LAN_IFACE` and `WAN_IFACE` are set to the same interface, `lo.forwarding` and `<iface>.forwarding` must both be on, and the forward chain must accept `iif "lo" oif $LAN_IFACE` for TPROXY spoofed replies to reach clients.
 
-## File roles
+## Configuration and file roles
+
+All configurable variables live in a single `.env` file (copy from `.env.example`). The `deploy.sh` script reads `.env` and generates working configs from templates via `envsubst`.
 
 | File | Role |
 |---|---|
-| `nftables-tproxy.conf` | The nftables ruleset — single source of truth for all filtering/NAT |
-| `setup-tproxy-route.sh` | One-shot script for policy routing + kernel parameters; idempotent (cleans old rules first) |
-| `tproxy-route.service` | systemd oneshot service wrapping the script for persistence across reboots |
+| `.env.example` | Configuration template — committed; users copy to `.env` |
+| `.env` | Local config (gitignored) — single source of truth for all variables |
+| `deploy.sh` | One-click deploy/uninstall — generates files, sets up routing, loads nftables |
+| `nftables-tproxy.conf.template` | nftables rules template with `${VAR}` placeholders |
+| `tproxy-route.service.template` | systemd service template with `${VAR}` placeholders |
+| `nftables-tproxy.conf` | Generated nftables ruleset (gitignored, produced by `deploy.sh`) |
+| `tproxy-route.service` | Generated systemd oneshot service (gitignored, produced by `deploy.sh`) |
+| `setup-tproxy-route.sh` | Policy routing + kernel parameters script; reads `.env` for defaults, CLI args override

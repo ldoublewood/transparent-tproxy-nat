@@ -6,16 +6,25 @@
 #
 # 用法 (root):
 #   bash setup-tproxy-route.sh [fwmark] [rt_table] [iface] [lan_subnet]
-#   默认: fwmark=1  rt_table=100  iface=wlo1  lan_subnet=192.168.1.0/24
+#   默认读取 .env，其次使用内置默认值
+#   优先级: CLI参数 > .env变量 > 内置默认值
 #
 # =============================================================================
 
 set -e
 
-MARK=${1:-1}                # 防火墙标记 (与 nftables 中 TPROXY_MARK 一致)
-TABLE=${2:-100}             # 策略路由表编号
-LAN_IFACE=${3:-wlo1}        # 局域网网卡名称
-LAN_SUBNET=${4:-192.168.2.0/24}  # 局域网子网
+# 尝试从 .env 加载配置 (如果存在)
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+if [ -f "$SCRIPT_DIR/.env" ]; then
+    source "$SCRIPT_DIR/.env"
+    echo "[*] 已从 $SCRIPT_DIR/.env 加载配置"
+fi
+
+# 参数: CLI 参数 > .env 变量 > 内置默认值
+MARK=${1:-${TPROXY_MARK:-1}}
+TABLE=${2:-${RT_TABLE:-100}}
+LAN_IFACE=${3:-${LAN_IFACE:-wlo1}}
+LAN_SUBNET=${4:-${LAN_SUBNET:-192.168.0.0/24}}
 
 echo "============================================"
 echo " TPROXY NAT 网关 — 策略路由 & 内核参数"
@@ -118,7 +127,10 @@ echo ""
 echo " 下一步: 加载 nftables 规则"
 echo "   sudo nft -f nftables-tproxy.conf"
 echo ""
-echo " 持久化部署:"
+echo " 或使用一键部署脚本完成全部步骤:"
+echo "   sudo bash deploy.sh"
+echo ""
+echo " 持久化部署 (手动):"
 echo "   # nftables"
 echo "   sudo cp nftables-tproxy.conf /etc/nftables.conf"
 echo "   sudo systemctl enable --now nftables"
