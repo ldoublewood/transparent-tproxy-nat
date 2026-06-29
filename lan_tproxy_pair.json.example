@@ -1,0 +1,6 @@
+{
+  "pairs": [
+    {"lan_subnet": "192.168.0.0/24", "tproxy_port": 17893},
+    {"lan_subnet": "192.168.1.0/24", "tproxy_port": 17894}
+  ]
+}

@@ -1,0 +1,114 @@
+#!/usr/sbin/nft -f
+# =============================================================================
+# nftables NAT 透明网关 + 多 TPROXY  完整配置
+# =============================================================================
+# ⚠ 此文件由 deploy.sh 从 nftables-tproxy-multi.conf.template 自动生成
+# ⚠ 请勿直接编辑 — 修改 .env 和 lan_tproxy_pair.json 后运行 sudo bash deploy.sh
+# =============================================================================
+# 多 TPROXY 模式: 不同 LAN 子网 → 不同 TPROXY 端口
+# 子网→端口映射定义在 lan_tproxy_pair.json 中
+# =============================================================================
+
+flush ruleset
+
+# =============================================================================
+# 用户变量 — 由 deploy.sh 从 .env 和 lan_tproxy_pair.json 自动填入
+# =============================================================================
+define LAN_IFACE     = ${LAN_IFACE}           # LAN口网卡 (客户端接入侧)
+define WAN_IFACE     = ${WAN_IFACE}           # WAN口网卡 (互联网出口)
+define ALL_LAN_SUBNETS = __ALL_LAN_SUBNETS__  # 所有 LAN 子网
+define TPROXY_MARK   = ${TPROXY_MARK}         # 防火墙标记
+
+# =============================================================================
+# table inet nat_gateway
+# =============================================================================
+table inet nat_gateway {
+
+    # -----------------------------------------------------------------
+    # 1. TPROXY 截获链 (mangle 优先级)
+    # -----------------------------------------------------------------
+    chain tproxy_prerouting {
+        type filter hook prerouting priority mangle; policy accept;
+
+        # (a) 排除本机回环
+        iif "lo" accept
+
+        # (b) 只处理 LAN 网卡入站流量
+        iif != $LAN_IFACE accept
+
+        # (c) 排除发往局域网内部的流量 (不代理内网通信)
+        ip daddr __ALL_LAN_SUBNETS__ accept
+
+        # (d) 排除广播/多播
+        ip daddr 224.0.0.0/4 accept
+
+        # (e) 排除发往本机自身的流量
+        fib daddr type local accept
+
+        # ==========================================================
+        # 多 TPROXY 规则 (从 lan_tproxy_pair.json 生成)
+        # ==========================================================
+
+__TPROXY_RULES__
+
+        # 未匹配的流量继续走正常路由/转发流程
+    }
+
+    # -----------------------------------------------------------------
+    # 2. input 链
+    # -----------------------------------------------------------------
+    chain input {
+        type filter hook input priority filter; policy drop;
+
+        iif "lo" accept
+        ct state established,related accept
+
+        # 允许 LAN 内客户端 SSH 到本机
+        iif $LAN_IFACE ip saddr __ALL_LAN_SUBNETS__ tcp dport 22 accept
+
+        # 允许 LAN 内 ping 本机
+        iif $LAN_IFACE ip saddr __ALL_LAN_SUBNETS__ ip protocol icmp accept
+
+        # 允许 DHCP
+        iif $LAN_IFACE udp dport 68 accept
+
+        # 放行 TPROXY 标记的包
+        meta mark $TPROXY_MARK accept comment "TPROXY local delivery"
+
+        # 其余入站记录后丢弃
+        log prefix "nft-input-drop: " flags all counter drop
+    }
+
+    # -----------------------------------------------------------------
+    # 3. forward 链
+    # -----------------------------------------------------------------
+    chain forward {
+        type filter hook forward priority filter; policy drop;
+
+        ct state established,related accept
+
+        # LAN → WAN 转发 (TPROXY 截获 TCP/UDP, 此处放行 ICMP 等)
+        iif $LAN_IFACE oif $WAN_IFACE ip saddr __ALL_LAN_SUBNETS__ accept
+
+        # TPROXY 回复包: lo → LAN
+        iif "lo" oif $LAN_IFACE accept
+
+        log prefix "nft-fwd-drop: " flags all counter drop
+    }
+
+    # -----------------------------------------------------------------
+    # 4. output 链
+    # -----------------------------------------------------------------
+    chain output {
+        type filter hook output priority filter; policy accept;
+    }
+
+    # -----------------------------------------------------------------
+    # 5. postrouting 链 — MASQUERADE
+    # -----------------------------------------------------------------
+    chain postrouting {
+        type nat hook postrouting priority srcnat; policy accept;
+
+        oif $WAN_IFACE ip saddr __ALL_LAN_SUBNETS__ masquerade
+    }
+}

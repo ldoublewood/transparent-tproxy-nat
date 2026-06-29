@@ -91,7 +91,11 @@ source "$SCRIPT_DIR/.env"
 set +a
 
 # 验证必要变量
-REQUIRED_VARS="LAN_IFACE WAN_IFACE LAN_SUBNET TPROXY_PORT TPROXY_MARK RT_TABLE"
+if [ "${ENABLED_MULTI_TPROXY:-no}" = "yes" ]; then
+    REQUIRED_VARS="LAN_IFACE WAN_IFACE TPROXY_MARK RT_TABLE"
+else
+    REQUIRED_VARS="LAN_IFACE WAN_IFACE LAN_SUBNET TPROXY_PORT TPROXY_MARK RT_TABLE"
+fi
 for var in $REQUIRED_VARS; do
     if [ -z "${!var}" ]; then
         echo "错误: .env 中缺少变量 $var"
@@ -102,12 +106,16 @@ done
 echo "============================================"
 echo " TPROXY NAT 网关 — 一键部署"
 echo "============================================"
-echo " LAN_IFACE    = $LAN_IFACE"
-echo " WAN_IFACE    = $WAN_IFACE"
-echo " LAN_SUBNET   = $LAN_SUBNET"
-echo " TPROXY_PORT  = $TPROXY_PORT"
-echo " TPROXY_MARK  = $TPROXY_MARK"
-echo " RT_TABLE     = $RT_TABLE"
+echo " LAN_IFACE              = $LAN_IFACE"
+echo " WAN_IFACE              = $WAN_IFACE"
+if [ "${ENABLED_MULTI_TPROXY:-no}" = "yes" ]; then
+    echo " 多 TPROXY 模式          = 已启用"
+else
+    echo " LAN_SUBNET             = $LAN_SUBNET"
+    echo " TPROXY_PORT            = $TPROXY_PORT"
+fi
+echo " TPROXY_MARK            = $TPROXY_MARK"
+echo " RT_TABLE               = $RT_TABLE"
 echo "============================================"
 
 # -----------------------------------------------------------------
@@ -116,8 +124,80 @@ echo "============================================"
 echo ""
 echo ">>> [1/4] 生成配置文件"
 
-envsubst < "$SCRIPT_DIR/nftables-tproxy.conf.template" > "$SCRIPT_DIR/nftables-tproxy.conf"
-echo "    ✓ nftables-tproxy.conf (变量已替换)"
+if [ "${ENABLED_MULTI_TPROXY:-no}" = "yes" ]; then
+    # ============================================================
+    # 多 TPROXY 模式: 从 lan_tproxy_pair.json 生成规则
+    # ============================================================
+    PAIR_FILE="$SCRIPT_DIR/lan_tproxy_pair.json"
+    if [ ! -f "$PAIR_FILE" ]; then
+        echo "错误: ENABLED_MULTI_TPROXY=yes 但未找到 $PAIR_FILE"
+        echo "请先创建: cp lan_tproxy_pair.json.example lan_tproxy_pair.json"
+        exit 1
+    fi
+
+    # 用 python3 解析 JSON，生成 ALL_LAN_SUBNETS 集合和 TPROXY 规则
+    GENERATED=$(python3 -c "
+import json
+
+with open('$PAIR_FILE') as f:
+    config = json.load(f)
+
+pairs = config.get('pairs', [])
+if not pairs:
+    raise SystemExit('lan_tproxy_pair.json 中没有定义 pairs')
+
+# 生成子网集合: { 192.168.0.0/24, 192.168.1.0/24 }
+subnets = ', '.join(p['lan_subnet'] for p in pairs)
+all_subnets = '{ ' + subnets + ' }'
+
+# 生成 TPROXY 规则 (每条规则用 \n 分隔，供 sed 替换)
+rules_lines = []
+for p in pairs:
+    subnet = p['lan_subnet']
+    port = p['tproxy_port']
+    rules_lines.append('        # {} → :{}'.format(subnet, port))
+    rules_lines.append('        ip protocol tcp ip saddr {} tproxy ip to :{} meta mark set \$TPROXY_MARK accept'.format(subnet, port))
+    rules_lines.append('        ip protocol udp ip saddr {} tproxy ip to :{} meta mark set \$TPROXY_MARK accept'.format(subnet, port))
+    rules_lines.append('')
+
+tproxy_rules = '\n'.join(rules_lines)
+
+print('ALL_SUBNETS=' + all_subnets)
+print('<<<RULES>>>')
+print(tproxy_rules)
+print('<<<END_RULES>>>')
+")
+
+    ALL_SUBNETS=$(echo "$GENERATED" | grep '^ALL_SUBNETS=' | cut -d= -f2-)
+    TPROXY_RULES=$(echo "$GENERATED" | sed -n '/^<<<RULES>>>$/,/^<<<END_RULES>>>$/p' | sed '1d;$d')
+
+    if [ -z "$ALL_SUBNETS" ] || [ -z "$TPROXY_RULES" ]; then
+        echo "错误: 无法从 lan_tproxy_pair.json 解析配置"
+        exit 1
+    fi
+
+    echo "    子网集合: $ALL_SUBNETS"
+
+    # 将 TPROXY 规则写入临时文件，供 sed 的 r 命令读取
+    TMP_RULES=$(mktemp)
+    echo "$TPROXY_RULES" > "$TMP_RULES"
+
+    # envsubst 替换 ${VAR}，sed 替换 __PLACEHOLDER__
+    envsubst < "$SCRIPT_DIR/nftables-tproxy-multi.conf.template" | \
+        sed -e "s|__ALL_LAN_SUBNETS__|$ALL_SUBNETS|g" \
+            -e "/__TPROXY_RULES__/r $TMP_RULES" \
+            -e "/__TPROXY_RULES__/d" \
+            > "$SCRIPT_DIR/nftables-tproxy.conf"
+
+    rm -f "$TMP_RULES"
+    echo "    ✓ nftables-tproxy.conf (多 TPROXY 模式)"
+else
+    # ============================================================
+    # 单 TPROXY 模式 (原有逻辑)
+    # ============================================================
+    envsubst < "$SCRIPT_DIR/nftables-tproxy.conf.template" > "$SCRIPT_DIR/nftables-tproxy.conf"
+    echo "    ✓ nftables-tproxy.conf (单 TPROXY 模式)"
+fi
 
 envsubst < "$SCRIPT_DIR/tproxy-route.service.template" > "$SCRIPT_DIR/tproxy-route.service"
 echo "    ✓ tproxy-route.service (变量已替换)"
