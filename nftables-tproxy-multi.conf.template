@@ -63,11 +63,11 @@ __TPROXY_RULES__
         iif "lo" accept
         ct state established,related accept
 
-        # 允许 LAN 内客户端 SSH 到本机
-        iif $LAN_IFACE ip saddr __ALL_LAN_SUBNETS__ tcp dport 22 accept
+        # 允许 LAN 内客户端 SSH 到本机 (配置子网 + 兜底)
+        iif $LAN_IFACE tcp dport 22 accept
 
-        # 允许 LAN 内 ping 本机
-        iif $LAN_IFACE ip saddr __ALL_LAN_SUBNETS__ ip protocol icmp accept
+        # 允许 LAN 内 ping 本机 (配置子网 + 兜底)
+        iif $LAN_IFACE ip protocol icmp accept
 
         # 允许 DHCP
         iif $LAN_IFACE udp dport 68 accept
@@ -87,8 +87,8 @@ __TPROXY_RULES__
 
         ct state established,related accept
 
-        # LAN → WAN 转发 (TPROXY 截获 TCP/UDP, 此处放行 ICMP 等)
-        iif $LAN_IFACE oif $WAN_IFACE ip saddr __ALL_LAN_SUBNETS__ accept
+        # LAN → WAN 转发 (非 TPROXY 流量: ICMP / 未配置子网的 IP 等)
+        iif $LAN_IFACE oif $WAN_IFACE accept
 
         # TPROXY 回复包: lo → LAN
         iif "lo" oif $LAN_IFACE accept
@@ -109,6 +109,6 @@ __TPROXY_RULES__
     chain postrouting {
         type nat hook postrouting priority srcnat; policy accept;
 
-        oif $WAN_IFACE ip saddr __ALL_LAN_SUBNETS__ masquerade
+        oif $WAN_IFACE masquerade
     }
 }
