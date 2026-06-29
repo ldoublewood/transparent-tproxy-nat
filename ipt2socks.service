@@ -20,7 +20,10 @@ RestartSec=5
 NoNewPrivileges=no
 ProtectSystem=strict
 ProtectHome=yes
-ReadWritePaths=/run/ipt2socks
+
+# systemd 自动创建 /run/ipt2socks (兼容 ProtectSystem=strict)
+RuntimeDirectory=ipt2socks
+RuntimeDirectoryPreserve=yes
 
 [Install]
 WantedBy=multi-user.target
