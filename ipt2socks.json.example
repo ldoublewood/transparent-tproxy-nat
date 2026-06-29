@@ -1,0 +1,22 @@
+{
+  "instances": [
+    {
+      "name": "us-proxy",
+      "socks5_host": "10.0.0.1",
+      "socks5_port": 1080,
+      "username": "",
+      "password": "",
+      "tproxy_port": 17893,
+      "verbose": true
+    },
+    {
+      "name": "jp-proxy",
+      "socks5_host": "10.0.0.2",
+      "socks5_port": 1081,
+      "username": "myuser",
+      "password": "mypass",
+      "tproxy_port": 17894,
+      "verbose": false
+    }
+  ]
+}

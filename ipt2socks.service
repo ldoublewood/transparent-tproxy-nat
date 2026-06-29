@@ -1,0 +1,26 @@
+[Unit]
+Description=ipt2socks Multi-Instance Manager
+Documentation=https://github.com/sssdbw/ipt2socks
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# 脚本和配置文件路径 — 按实际安装位置修改
+ExecStart=/usr/local/bin/ipt2socks-manager.sh run
+ExecStop=/usr/local/bin/ipt2socks-manager.sh stop
+Environment=IPT2SOCKS_CONFIG=/etc/ipt2socks/ipt2socks.json
+
+# 子进程退出后自动重启
+Restart=on-failure
+RestartSec=5
+
+# 安全加固
+NoNewPrivileges=no
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/run/ipt2socks
+
+[Install]
+WantedBy=multi-user.target
